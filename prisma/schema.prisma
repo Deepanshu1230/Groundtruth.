@@ -1,0 +1,42 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Document {
+  id        String         @id @default(cuid())
+  title     String
+  source    String
+  status    DocumentStatus @default(PENDING)
+  error     String?
+  createdAt DateTime       @default(now())
+  chunks    Chunk[]
+}
+
+model Chunk {
+  id         String                      @id @default(cuid())
+  documentId String
+  document   Document                    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  page       Int
+  strategy   String
+  embedding  Unsupported("vector(768)")?
+  createdAt  DateTime                    @default(now())
+
+  @@index([documentId])
+  @@index([strategy])
+}
