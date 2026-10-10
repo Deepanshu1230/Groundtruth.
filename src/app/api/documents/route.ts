@@ -9,6 +9,29 @@ const CreateDocumentSchema = z.object({
   url: z.string().trim().url(),
 });
 
+export async function GET() {
+  try {
+    const documents = await prisma.document.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        title: true,
+        source: true,
+        status: true,
+        error: true,
+        createdAt: true,
+        _count: { select: { chunks: true } },
+      },
+    });
+    return NextResponse.json(
+      documents.map(({ _count, ...document }) => ({ ...document, chunkCount: _count.chunks })),
+    );
+  } catch (err) {
+    console.error("Failed to list documents:", err);
+    return NextResponse.json({ error: "Could not load documents" }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   let body: unknown;
   try {
