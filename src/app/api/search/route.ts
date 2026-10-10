@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { vectorSearch } from "@/lib/retrieval/search";
+import { KEYWORD_MODES, search, SEARCH_MODES } from "@/lib/retrieval/search";
 
 export const runtime = "nodejs";
 
@@ -8,6 +8,8 @@ const SearchParamsSchema = z.object({
   q: z.string().trim().min(1, "q is required").max(1000),
   k: z.coerce.number().int().min(1).max(50).default(5), // query params arrive as strings
   documentId: z.string().trim().min(1).optional(),
+  mode: z.enum(SEARCH_MODES).default("vector"),
+  keywordMode: z.enum(KEYWORD_MODES).default("or"), // used by keyword and hybrid modes
 });
 
 export async function GET(request: NextRequest) {
@@ -18,10 +20,10 @@ export async function GET(request: NextRequest) {
       { status: 400 },
     );
   }
-  const { q, k, documentId } = parsed.data;
+  const { q, k, documentId, mode, keywordMode } = parsed.data;
 
   try {
-    const results = await vectorSearch(q, { k, documentId });
+    const results = await search(q, { k, documentId, mode, keywordMode });
     return NextResponse.json({ results });
   } catch (err) {
     console.error("Search failed:", err);

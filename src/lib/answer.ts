@@ -2,7 +2,7 @@ import { ApiError, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { prisma } from "./db";
 import { withRetry } from "./embed";
-import { vectorSearch, type SearchResult } from "./retrieval/search";
+import { search, type SearchMode, type SearchResult } from "./retrieval/search";
 
 const TOP_K = 5;
 const MAX_ATTEMPTS = 4;
@@ -52,13 +52,14 @@ export class QuotaExhaustedError extends Error {
 
 export interface AnswerOptions {
   documentId?: string;
+  mode?: SearchMode; // defaults to "vector"
 }
 
 export interface AnswerResult {
   answer: string;
   chunks: SearchResult[];
   latencyMs: number; // whole call: retrieval + generation
-  retrievalMs: number; // query embedding + vector search
+  retrievalMs: number; // query embedding (vector/hybrid) + search
   tokensIn: number;
   tokensOut: number; // visible answer only; thinking tokens are logged separately
 }
@@ -112,7 +113,7 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
     }
 
     const retrievalStart = performance.now();
-    chunks = await vectorSearch(question, { k: TOP_K, documentId: opts.documentId });
+    chunks = await search(question, { k: TOP_K, documentId: opts.documentId, mode: opts.mode ?? "vector" });
     retrievalMs = Math.round(performance.now() - retrievalStart);
 
     const generation: Generation = chunks.length === 0
