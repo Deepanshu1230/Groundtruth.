@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ingest } from "@/lib/ingest";
+import { ChunkStrategySchema } from "@/lib/retrieval/chunk";
 
 export const runtime = "nodejs"; // ingestion needs node:dns, node:http and Prisma
 
 const CreateDocumentSchema = z.object({
   url: z.string().trim().url(),
+  strategy: ChunkStrategySchema.optional(), // ingest() defaults to "recursive"
 });
 
 export async function GET() {
@@ -47,7 +49,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const { url } = parsed.data;
+  const { url, strategy } = parsed.data;
 
   let documentId: string;
   try {
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await ingest(documentId, url); // synchronous: the response waits for the whole pipeline
+    await ingest(documentId, url, strategy); // synchronous: the response waits for the whole pipeline
   } catch {
     // ingest() already stored status FAILED and the error message on the row.
     const failed = await prisma.document

@@ -1,5 +1,6 @@
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { z } from "zod";
+import { embed } from "../embed";
 import type { PdfPage } from "../parsePdf";
 
 export const ChunkStrategySchema = z.enum(["recursive", "fixed", "semantic"]);
@@ -19,8 +20,9 @@ export async function chunk(pages: PdfPage[], strategy: ChunkStrategy): Promise<
   switch (strategy) {
     case "recursive":
       return recursiveChunk(pages);
-    case "fixed":
     case "semantic":
+      return semanticChunk(pages);
+    case "fixed":
       throw new Error(`Chunking strategy "${strategy}" is not implemented`);
   }
 }
@@ -56,6 +58,109 @@ async function recursiveChunk(pages: PdfPage[]): Promise<TextChunk[]> {
   }
   // ...unless that would leave the document with nothing at all.
   return chunks.length > 0 ? chunks : dropped;
+}
+
+const SEMANTIC_MAX_CHARS = 1500;
+// Neighbour similarities below this percentile of the document's own similarities start a new chunk.
+// Relative rather than a fixed cutoff, because typical similarity levels vary a lot between documents.
+const SEMANTIC_BREAK_PERCENTILE = 25;
+// A sentence ends at . ! or ? followed by whitespace and then a capital letter or digit.
+const SENTENCE_BOUNDARY = /(?<=[.!?])\s+(?=[A-Z0-9])/;
+
+async function semanticChunk(pages: PdfPage[]): Promise<TextChunk[]> {
+  const pageSentences = pages.map(({ page, text }) => ({ page, sentences: splitSentences(text) }));
+  // One call for the whole document; embed() batches internally.
+  const vectors = await embed(pageSentences.flatMap((p) => p.sentences));
+
+  // similarities[p][i]: sentence i vs sentence i-1 on the same page. Chunks never span pages,
+  // so pairs across a page break aren't compared; index 0 is a placeholder.
+  let offset = 0;
+  const similarities = pageSentences.map(({ sentences }) => {
+    const sims = sentences.map((_, i) => (i === 0 ? NaN : cosineSimilarity(vectors[offset + i - 1], vectors[offset + i])));
+    offset += sentences.length;
+    return sims;
+  });
+  // NaN when the document has no neighbouring pairs; every `< NaN` is false, so nothing breaks on topic.
+  const threshold = percentile(similarities.flatMap((sims) => sims.slice(1)), SEMANTIC_BREAK_PERCENTILE);
+
+  const chunks: TextChunk[] = [];
+  pageSentences.forEach(({ page, sentences }, p) => {
+    const pieces: string[] = [];
+    let current = "";
+    sentences.forEach((sentence, i) => {
+      const topicShift = i > 0 && similarities[p][i] < threshold;
+      const tooLong = current.length + 1 + sentence.length > SEMANTIC_MAX_CHARS;
+      if (current && (topicShift || tooLong)) {
+        pieces.push(current);
+        current = sentence;
+      } else {
+        current = current ? `${current} ${sentence}` : sentence;
+      }
+    });
+    if (current) pieces.push(current);
+    for (const piece of mergeShortPieces(pieces)) chunks.push({ page, text: piece });
+  });
+  return chunks;
+}
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(SENTENCE_BOUNDARY)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .flatMap(wrapLongSentence);
+}
+
+// Tables, formulas and text without punctuation can form one "sentence" longer than a whole chunk;
+// cut those at word boundaries so no chunk (or embedding input) grows unbounded.
+function wrapLongSentence(sentence: string): string[] {
+  if (sentence.length <= SEMANTIC_MAX_CHARS) return [sentence];
+  const parts: string[] = [];
+  let current = "";
+  for (const word of sentence.split(/\s+/)) {
+    if (current && current.length + 1 + word.length > SEMANTIC_MAX_CHARS) {
+      parts.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+// Pieces under MIN_CHUNK_CHARS join the previous piece on the page. A short first piece has
+// no previous one, so it joins the next instead, as in recursiveChunk.
+function mergeShortPieces(pieces: string[]): string[] {
+  const merged: string[] = [];
+  for (const piece of pieces) {
+    if (piece.length < MIN_CHUNK_CHARS && merged.length > 0) merged[merged.length - 1] += ` ${piece}`;
+    else merged.push(piece);
+  }
+  if (merged.length > 1 && merged[0].length < MIN_CHUNK_CHARS) merged.splice(0, 2, `${merged[0]} ${merged[1]}`);
+  return merged;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA * normB) || 1);
+}
+
+// Linear interpolation between the closest ranks; NaN for no values.
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = ((sorted.length - 1) * p) / 100;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
 }
 
 // Consecutive chunks share up to CHUNK_OVERLAP characters; append `next` without repeating them.
