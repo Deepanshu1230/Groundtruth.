@@ -10,6 +10,8 @@ const SearchParamsSchema = z.object({
   documentId: z.string().trim().min(1).optional(),
   mode: z.enum(SEARCH_MODES).default("vector"),
   keywordMode: z.enum(KEYWORD_MODES).default("or"), // used by keyword and hybrid modes
+  // Not z.coerce.boolean(): that turns the string "false" into true.
+  rerank: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 });
 
 export async function GET(request: NextRequest) {
@@ -20,10 +22,10 @@ export async function GET(request: NextRequest) {
       { status: 400 },
     );
   }
-  const { q, k, documentId, mode, keywordMode } = parsed.data;
+  const { q, k, documentId, mode, keywordMode, rerank } = parsed.data;
 
   try {
-    const results = await search(q, { k, documentId, mode, keywordMode });
+    const { results } = await search(q, { k, documentId, mode, keywordMode, rerank });
     return NextResponse.json({ results });
   } catch (err) {
     console.error("Search failed:", err);

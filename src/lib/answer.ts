@@ -53,13 +53,16 @@ export class QuotaExhaustedError extends Error {
 export interface AnswerOptions {
   documentId?: string;
   mode?: SearchMode; // defaults to "vector"
+  rerank?: boolean; // defaults to false
 }
 
 export interface AnswerResult {
   answer: string;
   chunks: SearchResult[];
   latencyMs: number; // whole call: retrieval + generation
-  retrievalMs: number; // query embedding (vector/hybrid) + search
+  retrievalMs: number; // query embedding (vector/hybrid) + search + rerank
+  rerank: boolean;
+  rerankMs: number | null; // the rerank step alone (part of retrievalMs); null when rerank is off
   tokensIn: number;
   tokensOut: number; // visible answer only; thinking tokens are logged separately
 }
@@ -102,6 +105,8 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
   let config: LlmConfig | undefined;
   let chunks: SearchResult[] = [];
   let retrievalMs = 0;
+  let rerankMs: number | null = null;
+  const rerank = opts.rerank ?? false;
 
   try {
     config = readConfig();
@@ -113,7 +118,14 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
     }
 
     const retrievalStart = performance.now();
-    chunks = await search(question, { k: TOP_K, documentId: opts.documentId, mode: opts.mode ?? "vector" });
+    const retrieval = await search(question, {
+      k: TOP_K,
+      documentId: opts.documentId,
+      mode: opts.mode ?? "vector",
+      rerank,
+    });
+    chunks = retrieval.results;
+    rerankMs = retrieval.timing.rerankMs;
     retrievalMs = Math.round(performance.now() - retrievalStart);
 
     const generation: Generation = chunks.length === 0
@@ -122,12 +134,14 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       : await generate(question, chunks, config);
     const latencyMs = Math.round(performance.now() - start);
 
-    logQuery({ question, documentId: opts.documentId, chunks, config, retrievalMs, latencyMs, generation });
+    logQuery({ question, documentId: opts.documentId, chunks, config, retrievalMs, rerank, rerankMs, latencyMs, generation });
     return {
       answer: generation.answer,
       chunks,
       latencyMs,
       retrievalMs,
+      rerank,
+      rerankMs,
       tokensIn: generation.tokensIn,
       tokensOut: generation.tokensOut,
     };
@@ -138,6 +152,8 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       chunks,
       config,
       retrievalMs,
+      rerank,
+      rerankMs,
       latencyMs: Math.round(performance.now() - start),
       error: err instanceof Error ? err.message : String(err),
     });
@@ -202,6 +218,8 @@ function logQuery(entry: {
   chunks: SearchResult[];
   config?: LlmConfig;
   retrievalMs: number;
+  rerank: boolean;
+  rerankMs: number | null;
   latencyMs: number;
   generation?: Generation;
   error?: string;
@@ -219,6 +237,8 @@ function logQuery(entry: {
       chunkIds: chunks.map((c) => c.chunkId),
       scores: chunks.map((c) => Number(c.score.toFixed(4))),
       retrievalMs: entry.retrievalMs,
+      rerank: entry.rerank,
+      rerankMs: entry.rerankMs,
       latencyMs: entry.latencyMs,
       tokensIn: generation?.tokensIn ?? null,
       tokensOut: generation?.tokensOut ?? null,

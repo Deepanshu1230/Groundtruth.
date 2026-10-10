@@ -12,6 +12,7 @@
     "@google/genai": "^1",
     "@langchain/textsplitters": "^0",
     "@prisma/client": "^6",
+    "cohere-ai": "^8.1.0",
     "next": "16.4.0",
     "pdf-parse": "^1",
     "prisma": "^6",

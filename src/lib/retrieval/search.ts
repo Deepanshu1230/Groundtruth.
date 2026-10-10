@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { embed } from "../embed";
+import { rerank } from "./rerank";
 
 export const SEARCH_MODES = ["vector", "keyword", "hybrid"] as const;
 export type SearchMode = (typeof SEARCH_MODES)[number];
@@ -36,7 +37,35 @@ const HYBRID_CANDIDATE_FACTOR = 4;
 // The standard RRF constant from Cormack et al. (2009); damps the lead of the very top ranks.
 const RRF_K = 60;
 
-export async function search(query: string, opts: SearchOptions & { mode: SearchMode }): Promise<SearchResult[]> {
+// How many results to fetch for the reranker to choose from when rerankCandidates isn't given.
+const DEFAULT_RERANK_CANDIDATES = 20;
+
+export interface SearchRequest extends SearchOptions {
+  mode: SearchMode;
+  rerank?: boolean;
+  rerankCandidates?: number; // results fetched from `mode` before reranking down to k
+}
+
+export interface SearchResponse {
+  results: SearchResult[]; // reranked results also carry rerankScore
+  timing: {
+    rerankMs: number | null; // null when rerank is off
+  };
+}
+
+export async function search(query: string, opts: SearchRequest): Promise<SearchResponse> {
+  if (!opts.rerank) return { results: await searchByMode(query, opts), timing: { rerankMs: null } };
+
+  // Never fetch fewer candidates than the k we have to return.
+  const candidateCount = Math.max(opts.rerankCandidates ?? DEFAULT_RERANK_CANDIDATES, opts.k);
+  const candidates = await searchByMode(query, { ...opts, k: candidateCount });
+
+  const start = performance.now();
+  const results = await rerank(query, candidates, opts.k);
+  return { results, timing: { rerankMs: Math.round(performance.now() - start) } };
+}
+
+function searchByMode(query: string, opts: SearchOptions & { mode: SearchMode }): Promise<SearchResult[]> {
   switch (opts.mode) {
     case "vector":
       return vectorSearch(query, opts);
