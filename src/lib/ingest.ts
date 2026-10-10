@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { embed } from "./embed";
 import { fetchPdf } from "./fetchPdf";
+import { normalizeText } from "./normalizeText";
 import { parsePdf } from "./parsePdf";
 import { chunk, type ChunkStrategy } from "./retrieval/chunk";
 
@@ -20,7 +21,9 @@ export async function ingest(documentId: string, source: string): Promise<void> 
   try {
     // Do all slow network work before opening the transaction.
     const pdf = await fetchPdf(source);
-    const pages = await parsePdf(pdf);
+    const pages = normalizeText(await parsePdf(pdf));
+    // parsePdf rejects text-free PDFs, but cleanup can still strip everything (e.g. only page numbers).
+    if (pages.length === 0) throw new Error("PDF has no text left after cleanup");
     const chunks = await chunk(pages, STRATEGY);
     const vectors = await embed(chunks.map((c) => c.text));
 

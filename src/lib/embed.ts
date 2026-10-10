@@ -55,12 +55,21 @@ async function embedBatch(batch: string[], taskType: EmbedTaskType): Promise<num
   return embeddings.map((e) => normalize(e.values));
 }
 
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+export interface RetryOptions {
+  maxAttempts?: number;
+  isRetryable?: (err: unknown) => boolean;
+}
+
+// Defaults are embed()'s policy; other callers (answer.ts) pass their own.
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  { maxAttempts = MAX_ATTEMPTS, isRetryable: shouldRetry = isRetryable }: RetryOptions = {},
+): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      if (attempt >= MAX_ATTEMPTS || !isRetryable(err)) throw err;
+      if (attempt >= maxAttempts || !shouldRetry(err)) throw err;
       // 1s, 2s, 4s, 8s plus jitter so parallel jobs don't retry in lockstep.
       const delay = BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 250;
       await new Promise((resolve) => setTimeout(resolve, delay));
