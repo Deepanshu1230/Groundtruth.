@@ -31,10 +31,22 @@ interface ChatResult {
   tokensOut: number;
 }
 
+// Mirrors the server's SEARCH_MODES and ChunkStrategySchema; importing those would pull
+// server-only modules (Prisma, SDKs) into this client bundle.
+const SEARCH_MODES = ["vector", "keyword", "hybrid"] as const;
+const CHUNK_STRATEGIES = ["recursive", "fixed", "semantic"] as const;
+
+interface RetrievalSettings {
+  mode: (typeof SEARCH_MODES)[number];
+  rerank: boolean;
+  strategy: (typeof CHUNK_STRATEGIES)[number];
+}
+
 interface Exchange {
   id: number;
   question: string;
   scope: string; // document title or "All documents", as it was when asked
+  settings: RetrievalSettings; // as they were when asked
   result?: ChatResult;
   error?: string;
 }
@@ -44,6 +56,8 @@ const POLL_INTERVAL_MS = 3000;
 // after sending it to pick up the new row; polling then tracks its status.
 const NEW_ROW_REFRESH_MS = 1000;
 const ALL_DOCUMENTS = "";
+const SELECT_CLASS =
+  "min-w-0 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-950";
 
 const STATUS_STYLES: Record<DocumentStatus, string> = {
   PENDING: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
@@ -80,6 +94,7 @@ export default function Home() {
   const [addError, setAddError] = useState<string | null>(null);
 
   const [selectedId, setSelectedId] = useState(ALL_DOCUMENTS);
+  const [settings, setSettings] = useState<RetrievalSettings>({ mode: "vector", rerank: false, strategy: "recursive" });
   const [question, setQuestion] = useState("");
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const nextExchangeId = useRef(0);
@@ -169,7 +184,7 @@ export default function Home() {
     const id = nextExchangeId.current++;
     const text = question.trim();
     const scope = documents?.find((d) => d.id === selectedId)?.title ?? "All documents";
-    setExchanges((xs) => [...xs, { id, question: text, scope }]);
+    setExchanges((xs) => [...xs, { id, question: text, scope, settings }]);
     setQuestion("");
 
     const settle = (patch: Partial<Exchange>) =>
@@ -178,7 +193,7 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text, documentId: selectedId || undefined }),
+        body: JSON.stringify({ question: text, documentId: selectedId || undefined, ...settings }),
       });
       if (!res.ok) return settle({ error: await readError(res, "Could not generate an answer") });
       settle({ result: await res.json() });
@@ -274,23 +289,78 @@ export default function Home() {
 
       {/* Chat */}
       <main className="flex min-h-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-          <label htmlFor="scope" className="text-sm text-zinc-500">
-            Ask about
-          </label>
-          <select
-            id="scope"
-            value={selectedId}
-            onChange={(e) => setSelectedId(e.target.value)}
-            className="min-w-0 max-w-xs truncate rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-          >
-            <option value={ALL_DOCUMENTS}>All documents</option>
-            {readyDocuments.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.title}
-              </option>
-            ))}
-          </select>
+        <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex min-w-0 items-center gap-2">
+            <label htmlFor="scope" className="text-sm text-zinc-500">
+              Ask about
+            </label>
+            <select
+              id="scope"
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+              className={`${SELECT_CLASS} max-w-xs truncate`}
+            >
+              <option value={ALL_DOCUMENTS}>All documents</option>
+              {readyDocuments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.title}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="mode" className="text-sm text-zinc-500">
+              Mode
+            </label>
+            <select
+              id="mode"
+              value={settings.mode}
+              onChange={(e) => setSettings((s) => ({ ...s, mode: e.target.value as RetrievalSettings["mode"] }))}
+              className={SELECT_CLASS}
+            >
+              {SEARCH_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="rerank" className="text-sm text-zinc-500">
+              Rerank
+            </label>
+            <select
+              id="rerank"
+              value={settings.rerank ? "on" : "off"}
+              onChange={(e) => setSettings((s) => ({ ...s, rerank: e.target.value === "on" }))}
+              className={SELECT_CLASS}
+            >
+              <option value="off">off</option>
+              <option value="on">on</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="strategy" className="text-sm text-zinc-500">
+              Strategy
+            </label>
+            <select
+              id="strategy"
+              value={settings.strategy}
+              onChange={(e) =>
+                setSettings((s) => ({ ...s, strategy: e.target.value as RetrievalSettings["strategy"] }))
+              }
+              className={SELECT_CLASS}
+            >
+              {CHUNK_STRATEGIES.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto px-4 py-6">
@@ -348,6 +418,9 @@ export default function Home() {
                       </p>
                     </>
                   )}
+                  <p className="mt-1 text-xs text-zinc-400">
+                    mode {x.settings.mode} · rerank {x.settings.rerank ? "on" : "off"} · strategy {x.settings.strategy}
+                  </p>
                 </div>
               </section>
             ))}

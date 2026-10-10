@@ -5,6 +5,7 @@ import { ingest } from "@/lib/ingest";
 import { ChunkStrategySchema } from "@/lib/retrieval/chunk";
 
 export const runtime = "nodejs"; // ingestion needs node:dns, node:http and Prisma
+export const maxDuration = 60; // seconds; POST runs the whole ingestion before responding
 
 const CreateDocumentSchema = z.object({
   url: z.string().trim().url(),
