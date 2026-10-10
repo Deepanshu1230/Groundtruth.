@@ -2,6 +2,7 @@ import { ApiError, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { prisma } from "./db";
 import { withRetry } from "./embed";
+import type { ChunkStrategy } from "./retrieval/chunk";
 import { search, type SearchMode, type SearchResult } from "./retrieval/search";
 
 const TOP_K = 5;
@@ -54,6 +55,7 @@ export interface AnswerOptions {
   documentId?: string;
   mode?: SearchMode; // defaults to "vector"
   rerank?: boolean; // defaults to false
+  strategy?: ChunkStrategy; // which chunking's chunks to search; defaults to "recursive"
 }
 
 export interface AnswerResult {
@@ -63,6 +65,7 @@ export interface AnswerResult {
   retrievalMs: number; // query embedding (vector/hybrid) + search + rerank
   rerank: boolean;
   rerankMs: number | null; // the rerank step alone (part of retrievalMs); null when rerank is off
+  strategy: ChunkStrategy;
   tokensIn: number;
   tokensOut: number; // visible answer only; thinking tokens are logged separately
 }
@@ -107,6 +110,7 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
   let retrievalMs = 0;
   let rerankMs: number | null = null;
   const rerank = opts.rerank ?? false;
+  const strategy = opts.strategy ?? "recursive";
 
   try {
     config = readConfig();
@@ -123,6 +127,7 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       documentId: opts.documentId,
       mode: opts.mode ?? "vector",
       rerank,
+      strategy,
     });
     chunks = retrieval.results;
     rerankMs = retrieval.timing.rerankMs;
@@ -134,7 +139,18 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       : await generate(question, chunks, config);
     const latencyMs = Math.round(performance.now() - start);
 
-    logQuery({ question, documentId: opts.documentId, chunks, config, retrievalMs, rerank, rerankMs, latencyMs, generation });
+    logQuery({
+      question,
+      documentId: opts.documentId,
+      chunks,
+      config,
+      retrievalMs,
+      rerank,
+      rerankMs,
+      strategy,
+      latencyMs,
+      generation,
+    });
     return {
       answer: generation.answer,
       chunks,
@@ -142,6 +158,7 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       retrievalMs,
       rerank,
       rerankMs,
+      strategy,
       tokensIn: generation.tokensIn,
       tokensOut: generation.tokensOut,
     };
@@ -154,6 +171,7 @@ export async function answer(question: string, opts: AnswerOptions = {}): Promis
       retrievalMs,
       rerank,
       rerankMs,
+      strategy,
       latencyMs: Math.round(performance.now() - start),
       error: err instanceof Error ? err.message : String(err),
     });
@@ -220,6 +238,7 @@ function logQuery(entry: {
   retrievalMs: number;
   rerank: boolean;
   rerankMs: number | null;
+  strategy: ChunkStrategy;
   latencyMs: number;
   generation?: Generation;
   error?: string;
@@ -239,6 +258,7 @@ function logQuery(entry: {
       retrievalMs: entry.retrievalMs,
       rerank: entry.rerank,
       rerankMs: entry.rerankMs,
+      strategy: entry.strategy,
       latencyMs: entry.latencyMs,
       tokensIn: generation?.tokensIn ?? null,
       tokensOut: generation?.tokensOut ?? null,

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
+import { ChunkStrategySchema } from "@/lib/retrieval/chunk";
 import { KEYWORD_MODES, search, SEARCH_MODES } from "@/lib/retrieval/search";
 
 export const runtime = "nodejs";
@@ -12,6 +13,7 @@ const SearchParamsSchema = z.object({
   keywordMode: z.enum(KEYWORD_MODES).default("or"), // used by keyword and hybrid modes
   // Not z.coerce.boolean(): that turns the string "false" into true.
   rerank: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  strategy: ChunkStrategySchema.default("recursive"),
 });
 
 export async function GET(request: NextRequest) {
@@ -22,10 +24,10 @@ export async function GET(request: NextRequest) {
       { status: 400 },
     );
   }
-  const { q, k, documentId, mode, keywordMode, rerank } = parsed.data;
+  const { q, k, documentId, mode, keywordMode, rerank, strategy } = parsed.data;
 
   try {
-    const { results } = await search(q, { k, documentId, mode, keywordMode, rerank });
+    const { results } = await search(q, { k, documentId, mode, keywordMode, rerank, strategy });
     return NextResponse.json({ results });
   } catch (err) {
     console.error("Search failed:", err);
