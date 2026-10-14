@@ -23,7 +23,7 @@ export async function chunk(pages: PdfPage[], strategy: ChunkStrategy): Promise<
     case "semantic":
       return semanticChunk(pages);
     case "fixed":
-      throw new Error(`Chunking strategy "${strategy}" is not implemented`);
+      return chunkFixed(pages);
   }
 }
 
@@ -58,6 +58,52 @@ async function recursiveChunk(pages: PdfPage[]): Promise<TextChunk[]> {
   }
   // ...unless that would leave the document with nothing at all.
   return chunks.length > 0 ? chunks : dropped;
+}
+
+// A cut at a space may move back at most this far into the window; past that a word is split instead,
+// so a long unbroken string (URL, formula) can't shrink windows to almost nothing.
+const FIXED_MIN_CUT_RATIO = 0.6;
+
+// Fixed-size character windows with `overlap` characters shared between neighbours, page by page.
+export function chunkFixed(pages: PdfPage[], size = 512, overlap = 64): TextChunk[] {
+  if (!Number.isInteger(size) || size < 1) throw new Error(`size must be a positive integer, got ${size}`);
+  if (!Number.isInteger(overlap) || overlap < 0 || overlap >= size) {
+    throw new Error(`overlap must be an integer in [0, size), got ${overlap}`);
+  }
+
+  const chunks: TextChunk[] = [];
+  for (const { page, text } of pages) {
+    // Windows are kept as offsets into the page so merging is exact. Matching text to find the
+    // overlap (as mergeOverlapping does) can over-match on repetitive text and drop content.
+    const windows: { start: number; end: number }[] = [];
+    let start = 0;
+    while (start < text.length) {
+      let end = Math.min(start + size, text.length);
+      if (end < text.length) end = lastWhitespaceCut(text, start + Math.ceil(size * FIXED_MIN_CUT_RATIO), end);
+
+      const length = text.slice(start, end).trim().length;
+      const previous = windows.at(-1);
+      if (length > 0) {
+        // Fold a short window into the previous one by extending it; they overlap, so nothing repeats.
+        if (length < MIN_CHUNK_CHARS && previous) previous.end = end;
+        else windows.push({ start, end });
+      }
+      if (end >= text.length) break;
+      // Always move forward, even if a small window minus the overlap would not.
+      start = Math.max(end - overlap, start + 1);
+    }
+    // A page whose entire text is shorter than the minimum has nothing to merge into, so it stays as is.
+    for (const w of windows) chunks.push({ page, text: text.slice(w.start, w.end).trim() });
+  }
+  return chunks;
+}
+
+// Index of the last whitespace character in [min, end], or `end` if there is none (hard cut).
+function lastWhitespaceCut(text: string, min: number, end: number): number {
+  for (let i = end; i >= min; i--) {
+    if (/\s/.test(text[i])) return i;
+  }
+  return end;
 }
 
 const SEMANTIC_MAX_CHARS = 1500;

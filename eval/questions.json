@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "id": "transformer-heads",
+    "question": "How many parallel attention heads does the Transformer use?",
+    "expectedAnswer": "8 heads (h = 8), each with d_k = d_v = d_model / h = 64.",
+    "documentId": "REPLACE_WITH_DOCUMENT_ID",
+    "sourcePages": [5],
+    "type": "factual"
+  },
+  {
+    "id": "transformer-scaling",
+    "question": "Why are the dot products scaled by 1/sqrt(d_k) in scaled dot-product attention?",
+    "expectedAnswer": "For large d_k the dot products grow large in magnitude, pushing the softmax into regions with extremely small gradients; scaling counteracts this.",
+    "documentId": "REPLACE_WITH_DOCUMENT_ID",
+    "sourcePages": [4],
+    "type": "conceptual"
+  },
+  {
+    "id": "transformer-unanswerable-gpu-price",
+    "question": "How much did the GPUs used to train the Transformer cost?",
+    "expectedAnswer": null,
+    "documentId": "REPLACE_WITH_DOCUMENT_ID",
+    "sourcePages": [],
+    "type": "unanswerable"
+  }
+]
